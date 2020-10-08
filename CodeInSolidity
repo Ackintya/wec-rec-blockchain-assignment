@@ -1,0 +1,150 @@
+pragma solidity ^0.4.24;
+
+contract game{
+    //enum for the different outcomes in a coin flip HEAD==0, TAIL==1
+    enum Betoutcomes{HEAD,TAIL}
+    
+    // Represents a bet session, where players can place bets following the session constraints.
+    struct BetSession {
+        uint oracleFee;
+        uint duration;
+        uint depositbyOracle;
+        uint amount;    
+        address oracle;
+        Betoutcomes owneroutcome;
+        Betoutcomes acceptoroutcome;
+        uint starttime;
+    }
+    //Address of the participants
+    address public owner;
+    address public acceptor;
+    
+    //The current session of bets
+    BetSession sessioninprogress;
+    
+    //Bunch of modifiers for authorisation and deadline
+    modifier onlyoracle(){
+        require(msg.sender== sessioninprogress.oracle,"onlyoracle is authorised");
+        _;
+    }
+    modifier OwnerOrAcceptor() {
+        require(msg.sender == owner||msg.sender==acceptor,"only owner and acceptor can accesss");
+        _;
+    }
+     
+     modifier beforedeadline() {
+        require(block.timestamp <=  sessioninprogress.starttime+(sessioninprogress.duration * 1 minutes),"deadline over already");
+        _;
+    }
+     modifier afterdeadline() {
+        require(block.timestamp >= sessioninprogress.starttime+(sessioninprogress.duration * 1 minutes));  
+        _;
+    }
+    
+    //constructor by challenger providing minimiumbet,betting period,fee of oracle, outcome preferred by owner
+    constructor(uint deadline,uint fee) public
+    {
+        owner=msg.sender;
+        sessioninprogress.duration=deadline;
+        sessioninprogress.oracleFee=fee;
+        sessioninprogress.starttime=block.timestamp;
+    }
+    //counter to avoid betting of more than two people
+    int count=0;
+    
+    /**function to place bets by owner and challenger keeping in mind
+    betamount,deadline,scope of outcomes and number of bets */
+    function placeBet(Betoutcomes outcomepreferred)  external payable beforedeadline
+    {
+        if(sessioninprogress.amount!=0)
+            require(sessioninprogress.amount==msg.value,"Bets are not equal");
+        require(count<=2,"NO MORE THAN 2 people CAN PLAY");
+        require(outcomepreferred <= Betoutcomes.TAIL,"Outcome not found");
+        
+        if(msg.sender==owner)
+        {  sessioninprogress.amount+=msg.value;
+           sessioninprogress.owneroutcome=outcomepreferred;
+           count++;
+        }
+        else
+        {
+            acceptor=msg.sender;
+            sessioninprogress.amount+=msg.value;
+            sessioninprogress.acceptoroutcome=outcomepreferred;
+            count++;
+        }
+        
+        
+    }
+    //function to show public the current status of Bets after the bet period
+    function ShowCurrentBets () public afterdeadline returns (Betoutcomes,Betoutcomes)
+        {
+            Betoutcomes ownersoutcome=sessioninprogress.owneroutcome;
+             Betoutcomes acceptorsoutcome=sessioninprogress.acceptoroutcome;
+             return(ownersoutcome,acceptorsoutcome);
+            
+        }
+        //function to show acceptor and challenger the proposal for choosing oracle
+         function Showoracleproposal () public beforedeadline OwnerOrAcceptor returns (address)
+        {
+             return(sessioninprogress.oracle);
+            
+        }
+        
+    /**selection of oracle by both owner and acceptor.
+    If anyone of them proposes then other can either agree or wait for proposal to get changed */
+    
+    function ChooseOracle(address oracleaddress) public  beforedeadline OwnerOrAcceptor
+    { if(sessioninprogress.oracle==0)
+    {
+        sessioninprogress.oracle=oracleaddress;
+        address oracleAddPropoposer=msg.sender;
+    }
+    else
+    {   require(sessioninprogress.oracle==oracleaddress||oracleAddPropoposer==msg.sender);
+        sessioninprogress.oracle=oracleaddress;
+    }
+    }
+    //Deposit money by oracle which should be greater than 5% of total amount
+    function depositforOracle() public payable onlyoracle beforedeadline
+    {require(msg.value >= (sessioninprogress.oracleFee));
+        sessioninprogress.depositbyOracle=msg.value;
+    }
+    //function usde by oracle after voting period to calculate result
+    function result() public onlyoracle afterdeadline{
+        require(sessioninprogress.depositbyOracle!=0);
+       Betoutcomes outcomeresult=flipCoin();
+        RewardWinners(outcomeresult);
+    }
+    
+    //algorithm for calculating result
+    function flipCoin() private returns (Betoutcomes) 
+        {return Betoutcomes(uint(keccak256(abi.encodePacked(block.timestamp, sessioninprogress.amount))) % 2);}
+    
+    //Reward distribution to winner and oracle (before timeout)
+    function RewardWinners(Betoutcomes resulta) private onlyoracle afterdeadline {
+         require(block.timestamp <=  (sessioninprogress.starttime + sessioninprogress.duration * 2 minutes));
+         
+     uint fee = address(this).balance * sessioninprogress.oracleFee / 100;
+     uint totalPrize = address(this).balance - fee;
+     
+     sessioninprogress.oracle.transfer(sessioninprogress.depositbyOracle+fee);
+     
+     if(resulta==sessioninprogress.owneroutcome)
+       owner.transfer(totalPrize);
+     else if(resulta==sessioninprogress.acceptoroutcome)
+       acceptor.transfer(totalPrize);
+     else
+       sessioninprogress.oracle.transfer(address(this).balance);
+     
+    }
+    //This is toggled by OwnerOrAcceptor and the money is redistributed 
+    // amongst the player along with oracle's deposit
+    function moneyback() public OwnerOrAcceptor afterdeadline {
+        require(block.timestamp >=  (sessioninprogress.starttime + sessioninprogress.duration * 2 minutes));  
+        owner.transfer(address(this).balance/2);
+        acceptor.transfer(address(this).balance);
+        selfdestruct(address(this));
+    }
+    
+}
