@@ -1,5 +1,6 @@
 ## wec-rec-blockchain-assignment
 
+The code for this is written and tested on Remix IDE and written in solidity language
 This is a game of coin flip betweeen two participants.
 
 There is an oracle/judge who decides the results and is responsible for prize/bet distribution.
